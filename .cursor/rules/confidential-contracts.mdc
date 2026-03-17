@@ -1,0 +1,36 @@
+---
+description: Constraints and patterns for writing confidential (FHE) Solidity contracts
+globs: contracts/**/*.sol
+alwaysApply: false
+---
+
+# Confidential Contract Constraints
+
+## No reverting based on confidential data
+
+Encrypted handle values (e.g. `euint64`, `ebool`) are opaque — the contract cannot read their plaintext at execution time. This means you **cannot** use a `require` or `revert` that depends on the decrypted value of a handle. Instead, absorb failures silently using patterns like `FHE.select` or `FHESafeMath.tryDecrease`.
+
+```solidity
+// ❌ BAD — tries to branch/revert on encrypted data
+require(FHE.decrypt(balance) >= amount, "insufficient balance");
+
+// ✅ GOOD — uses FHE.select to handle the failure case without reverting
+ebool success = FHE.ge(balance, amount);
+euint64 transferred = FHE.select(success, amount, FHE.asEuint64(0));
+```
+
+## No branching on handle values
+
+You cannot use `if`/`else` or any control flow that depends on the plaintext value behind an encrypted handle. All encrypted-data-dependent logic must be expressed with FHE operations (`FHE.select`, `FHE.add`, comparisons, etc.) that keep computation in the encrypted domain.
+
+```solidity
+// ❌ BAD — branches on encrypted data
+if (FHE.decrypt(amount) > 0) { ... }
+
+// ✅ GOOD — stays in encrypted domain
+euint64 result = FHE.select(FHE.gt(amount, FHE.asEuint64(0)), valueA, valueB);
+```
+
+## Transient approvals are equivalent to persistent approvals to an unknown contract
+
+`FHE.allowTransient(handle, address)` grants access to a handle for the duration of the current transaction. However, the recipient can extend this to a persistent approval (via `FHE.allow`) before the transaction ends. Therefore, treat any transient approval as if it were a persistent approval granted to an arbitrary, unknown contract. Never rely on transient approval expiry as a security boundary.
