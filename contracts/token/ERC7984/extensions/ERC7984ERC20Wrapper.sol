@@ -27,7 +27,17 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC7984ERC20Wrapper, IERC1363
     uint8 private immutable _decimals;
     uint256 private immutable _rate;
 
-    mapping(bytes32 unwrapRequestId => address recipient) private _unwrapRequests;
+    /**
+     * @dev Pending unwrap request. The `recipient` (20 bytes) and `metadata` (12 bytes) are packed by the
+     * compiler into a single 32-byte storage slot. Extensions can attach arbitrary `metadata` to a request
+     * by routing through {_unwrap-address-address-euint64-bytes12} and read it back via {unwrapMetadata}.
+     */
+    struct UnwrapRequest {
+        address recipient;
+        bytes12 metadata;
+    }
+
+    mapping(bytes32 unwrapRequestId => UnwrapRequest request) private _unwrapRequests;
 
     error InvalidUnwrapRequest(bytes32 unwrapRequestId);
     error ERC7984TotalSupplyOverflow();
@@ -119,6 +129,7 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC7984ERC20Wrapper, IERC1363
         address to = unwrapRequester(unwrapRequestId);
         require(to != address(0), InvalidUnwrapRequest(unwrapRequestId));
 
+        bytes12 metadata = unwrapMetadata(unwrapRequestId);
         euint64 unwrapAmount_ = unwrapAmount(unwrapRequestId);
         delete _unwrapRequests[unwrapRequestId];
 
@@ -132,6 +143,8 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC7984ERC20Wrapper, IERC1363
         SafeERC20.safeTransfer(IERC20(underlying()), to, unwrapAmountCleartext * rate());
 
         emit UnwrapFinalized(to, unwrapRequestId, unwrapAmount_, unwrapAmountCleartext);
+
+        _afterUnwrapFinalized(to, unwrapRequestId, metadata, unwrapAmount_, unwrapAmountCleartext);
     }
 
     /// @inheritdoc ERC7984
@@ -184,7 +197,16 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC7984ERC20Wrapper, IERC1363
      * `unwrapRequestId`. Returns `address(0)` if there is no pending unwrap request with id `unwrapRequestId`.
      */
     function unwrapRequester(bytes32 unwrapRequestId) public view virtual returns (address) {
-        return _unwrapRequests[unwrapRequestId];
+        return _unwrapRequests[unwrapRequestId].recipient;
+    }
+
+    /**
+     * @dev Gets the metadata attached to a pending unwrap request identified by `unwrapRequestId`. Returns
+     * `bytes12(0)` if there is no pending request or if no metadata was attached. Metadata is set by extensions
+     * via {_unwrap-address-address-euint64-bytes12}.
+     */
+    function unwrapMetadata(bytes32 unwrapRequestId) public view virtual returns (bytes12) {
+        return _unwrapRequests[unwrapRequestId].metadata;
     }
 
     /**
@@ -208,8 +230,21 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC7984ERC20Wrapper, IERC1363
         return super._update(from, to, amount);
     }
 
-    /// @dev Internal logic for handling the creation of unwrap requests. Returns the unwrap request id.
+    /**
+     * @dev Internal logic for handling the creation of unwrap requests with no attached metadata. Returns the
+     * unwrap request id. See {_unwrap-address-address-euint64-bytes12}.
+     */
     function _unwrap(address from, address to, euint64 amount) internal virtual returns (bytes32) {
+        return _unwrap(from, to, amount, bytes12(0));
+    }
+
+    /**
+     * @dev Internal logic for handling the creation of unwrap requests, attaching `metadata` that is packed with
+     * the recipient in storage and made available again at {finalizeUnwrap} via {_afterUnwrapFinalized}. Extensions
+     * can route through this overload (e.g. from an overridden public `unwrap`) to associate arbitrary data with a
+     * request. Returns the unwrap request id.
+     */
+    function _unwrap(address from, address to, euint64 amount, bytes12 metadata) internal virtual returns (bytes32) {
         require(to != address(0), ERC7984InvalidReceiver(to));
         require(from == msg.sender || isOperator(from, msg.sender), ERC7984UnauthorizedSpender(from, msg.sender));
 
@@ -223,11 +258,25 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC7984ERC20Wrapper, IERC1363
         // cipher-texts are unique--this holds here but is not always true. Be cautious when assuming
         // cipher-text uniqueness.
         bytes32 unwrapRequestId = euint64.unwrap(unwrapAmount_);
-        _unwrapRequests[unwrapRequestId] = to;
+        _unwrapRequests[unwrapRequestId] = UnwrapRequest({recipient: to, metadata: metadata});
 
         emit UnwrapRequested(to, unwrapRequestId, unwrapAmount_);
         return unwrapRequestId;
     }
+
+    /**
+     * @dev Hook called at the end of {finalizeUnwrap}, after the underlying tokens have been transferred and the
+     * request has been deleted. Receives the `metadata` that was attached to the request via
+     * {_unwrap-address-address-euint64-bytes12}. Defaults to a no-op; extensions may override to react to a
+     * finalized unwrap.
+     */
+    function _afterUnwrapFinalized(
+        address to,
+        bytes32 unwrapRequestId,
+        bytes12 metadata,
+        euint64 amount,
+        uint64 cleartextAmount
+    ) internal virtual {}
 
     /**
      * @dev Returns the default number of decimals of the underlying ERC-20 token that is being wrapped.

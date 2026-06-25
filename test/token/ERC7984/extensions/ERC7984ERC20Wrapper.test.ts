@@ -337,8 +337,60 @@ describe('ERC7984ERC20Wrapper', function () {
         .connect(this.holder)
         .$_unwrap(this.holder, this.holder, await this.wrapper.confidentialBalanceOf(this.holder.address));
 
-      const [unwrapAmount] = (await this.wrapper.queryFilter(this.wrapper.filters.return$_unwrap()))[0].args;
+      const [unwrapAmount] = (
+        await this.wrapper.queryFilter(this.wrapper.filters.return$_unwrap_address_address_euint64())
+      )[0].args;
       await expect(this.wrapper.unwrapRequester(unwrapAmount)).to.eventually.eq(this.holder);
+    });
+
+    it('attaches no metadata by default', async function () {
+      await this.wrapper
+        .connect(this.holder)
+        .unwrap(this.holder, this.holder, await this.wrapper.confidentialBalanceOf(this.holder.address));
+
+      const [, unwrapRequestId] = (await this.wrapper.queryFilter(this.wrapper.filters.UnwrapRequested()))[0].args;
+      await expect(this.wrapper.unwrapMetadata(unwrapRequestId)).to.eventually.eq('0x000000000000000000000000');
+    });
+
+    it('packs metadata with the recipient and exposes it', async function () {
+      const metadata = '0x0123456789abcdef01234567'; // 12 bytes
+
+      await this.wrapper
+        .connect(this.holder)
+        ['$_unwrap(address,address,bytes32,bytes12)'](
+          this.holder,
+          this.holder,
+          await this.wrapper.confidentialBalanceOf(this.holder.address),
+          metadata,
+        );
+
+      const [unwrapRequestId] = (
+        await this.wrapper.queryFilter(this.wrapper.filters.return$_unwrap_address_address_euint64_bytes12())
+      )[0].args;
+      await expect(this.wrapper.unwrapRequester(unwrapRequestId)).to.eventually.eq(this.holder);
+      await expect(this.wrapper.unwrapMetadata(unwrapRequestId)).to.eventually.eq(metadata);
+    });
+
+    it('clears metadata on finalize', async function () {
+      const metadata = '0x0123456789abcdef01234567';
+
+      await this.wrapper
+        .connect(this.holder)
+        ['$_unwrap(address,address,bytes32,bytes12)'](
+          this.holder,
+          this.holder,
+          await this.wrapper.confidentialBalanceOf(this.holder.address),
+          metadata,
+        );
+
+      const [unwrapRequestId] = (
+        await this.wrapper.queryFilter(this.wrapper.filters.return$_unwrap_address_address_euint64_bytes12())
+      )[0].args;
+      const { abiEncodedClearValues, decryptionProof } = await fhevm.publicDecrypt([unwrapRequestId]);
+      await this.wrapper.connect(this.holder).finalizeUnwrap(unwrapRequestId, abiEncodedClearValues, decryptionProof);
+
+      await expect(this.wrapper.unwrapRequester(unwrapRequestId)).to.eventually.eq(ethers.ZeroAddress);
+      await expect(this.wrapper.unwrapMetadata(unwrapRequestId)).to.eventually.eq('0x000000000000000000000000');
     });
   });
 
