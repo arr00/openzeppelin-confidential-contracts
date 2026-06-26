@@ -129,7 +129,6 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC7984ERC20Wrapper, IERC1363
         address to = unwrapRequester(unwrapRequestId);
         require(to != address(0), InvalidUnwrapRequest(unwrapRequestId));
 
-        bytes12 metadata = unwrapMetadata(unwrapRequestId);
         euint64 unwrapAmount_ = unwrapAmount(unwrapRequestId);
         delete _unwrapRequests[unwrapRequestId];
 
@@ -143,8 +142,6 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC7984ERC20Wrapper, IERC1363
         SafeERC20.safeTransfer(IERC20(underlying()), to, unwrapAmountCleartext * rate());
 
         emit UnwrapFinalized(to, unwrapRequestId, unwrapAmount_, unwrapAmountCleartext);
-
-        _afterUnwrapFinalized(to, unwrapRequestId, metadata, unwrapAmount_, unwrapAmountCleartext);
     }
 
     /// @inheritdoc ERC7984
@@ -240,9 +237,8 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC7984ERC20Wrapper, IERC1363
 
     /**
      * @dev Internal logic for handling the creation of unwrap requests, attaching `metadata` that is packed with
-     * the recipient in storage and made available again at {finalizeUnwrap} via {_afterUnwrapFinalized}. Extensions
-     * can route through this overload (e.g. from an overridden public `unwrap`) to associate arbitrary data with a
-     * request. Returns the unwrap request id.
+     * the recipient in storage. Extensions can route through this overload (e.g. from an overridden public `unwrap`)
+     * to associate arbitrary data with a request. Returns the unwrap request id.
      */
     function _unwrap(address from, address to, euint64 amount, bytes12 metadata) internal virtual returns (bytes32) {
         require(to != address(0), ERC7984InvalidReceiver(to));
@@ -263,20 +259,6 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC7984ERC20Wrapper, IERC1363
         emit UnwrapRequested(to, unwrapRequestId, unwrapAmount_);
         return unwrapRequestId;
     }
-
-    /**
-     * @dev Hook called at the end of {finalizeUnwrap}, after the underlying tokens have been transferred and the
-     * request has been deleted. Receives the `metadata` that was attached to the request via
-     * {_unwrap-address-address-euint64-bytes12}. Defaults to a no-op; extensions may override to react to a
-     * finalized unwrap.
-     */
-    function _afterUnwrapFinalized(
-        address to,
-        bytes32 unwrapRequestId,
-        bytes12 metadata,
-        euint64 amount,
-        uint64 cleartextAmount
-    ) internal virtual {}
 
     /**
      * @dev Returns the default number of decimals of the underlying ERC-20 token that is being wrapped.
