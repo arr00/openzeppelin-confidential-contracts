@@ -2,7 +2,7 @@ import { ERC7984ERC20WrapperMock } from '../../../../types';
 import { INTERFACE_IDS, INVALID_ID } from '../../../helpers/interface';
 import { FhevmType } from '@fhevm/hardhat-plugin';
 import { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers';
-import { setStorageAt, time } from '@nomicfoundation/hardhat-network-helpers';
+import { time } from '@nomicfoundation/hardhat-network-helpers';
 import { expect } from 'chai';
 import { ethers, fhevm } from 'hardhat';
 
@@ -335,12 +335,14 @@ describe('ERC7984ERC20Wrapper', function () {
     it('returns unwrap amount', async function () {
       await this.wrapper
         .connect(this.holder)
-        .$_unwrap(this.holder, this.holder, await this.wrapper.confidentialBalanceOf(this.holder.address));
+        ['$_unwrap(address,address,bytes32)'](
+          this.holder,
+          this.holder,
+          await this.wrapper.confidentialBalanceOf(this.holder.address),
+        );
 
-      const [unwrapAmount] = (
-        await this.wrapper.queryFilter(this.wrapper.filters.return$_unwrap_address_address_euint64())
-      )[0].args;
-      await expect(this.wrapper.unwrapRequester(unwrapAmount)).to.eventually.eq(this.holder);
+      const [, unwrapRequestId] = (await this.wrapper.queryFilter(this.wrapper.filters.UnwrapRequested()))[0].args;
+      await expect(this.wrapper.unwrapRequester(unwrapRequestId)).to.eventually.eq(this.holder);
     });
 
     it('attaches no metadata by default', async function () {
@@ -352,8 +354,8 @@ describe('ERC7984ERC20Wrapper', function () {
       await expect(this.wrapper.unwrapMetadata(unwrapRequestId)).to.eventually.eq('0x000000000000000000000000');
     });
 
-    it('packs metadata with the recipient and exposes it', async function () {
-      const metadata = '0x0123456789abcdef01234567'; // 12 bytes
+    it('exposes metadata when attached', async function () {
+      const metadata = '0x0123456789abcdef01234567';
 
       await this.wrapper
         .connect(this.holder)
@@ -364,37 +366,11 @@ describe('ERC7984ERC20Wrapper', function () {
           metadata,
         );
 
-      const [unwrapRequestId] = (
-        await this.wrapper.queryFilter(this.wrapper.filters.return$_unwrap_address_address_euint64_bytes12())
-      )[0].args;
-      await expect(this.wrapper.unwrapRequester(unwrapRequestId)).to.eventually.eq(this.holder);
+      const [, unwrapRequestId] = (await this.wrapper.queryFilter(this.wrapper.filters.UnwrapRequested()))[0].args;
       await expect(this.wrapper.unwrapMetadata(unwrapRequestId)).to.eventually.eq(metadata);
     });
 
-    it.only('stores recipient and metadata in a single packed storage slot', async function () {
-      const metadata = '0x0123456789abcdef01234567'; // 12 bytes
-      const recipient = this.recipient;
-
-      await this.wrapper
-        .connect(this.holder)
-        ['$_unwrap(address,address,bytes32,bytes12)'](
-          this.holder,
-          recipient.address,
-          await this.wrapper.confidentialBalanceOf(this.holder.address),
-          metadata,
-        );
-
-      const [unwrapRequestId] = (
-        await this.wrapper.queryFilter(this.wrapper.filters.return$_unwrap_address_address_euint64_bytes12())
-      )[0].args;
-
-      const slot = unwrapRequestStorageSlot(unwrapRequestId);
-      const slotValue = await ethers.provider.getStorage(this.wrapper.target, slot);
-
-      console.log(slotValue);
-    });
-
-    it.only('stores zero metadata in the upper 12 bytes when omitted', async function () {
+    it('should store address in LSBs', async function () {
       await this.wrapper
         .connect(this.holder)
         .unwrap(this.holder, this.holder, await this.wrapper.confidentialBalanceOf(this.holder.address));
@@ -405,7 +381,9 @@ describe('ERC7984ERC20Wrapper', function () {
         this.wrapper.target,
         unwrapRequestStorageSlot(unwrapRequestId),
       );
-      console.log(slotValue);
+
+      // `zeroPadValue` pads on the MSB side (left)
+      expect(slotValue).to.equal(ethers.zeroPadValue(this.holder.address, 32));
     });
 
     it('clears metadata on finalize', async function () {
@@ -420,9 +398,7 @@ describe('ERC7984ERC20Wrapper', function () {
           metadata,
         );
 
-      const [unwrapRequestId] = (
-        await this.wrapper.queryFilter(this.wrapper.filters.return$_unwrap_address_address_euint64_bytes12())
-      )[0].args;
+      const [, unwrapRequestId] = (await this.wrapper.queryFilter(this.wrapper.filters.UnwrapRequested()))[0].args;
       const { abiEncodedClearValues, decryptionProof } = await fhevm.publicDecrypt([unwrapRequestId]);
       await this.wrapper.connect(this.holder).finalizeUnwrap(unwrapRequestId, abiEncodedClearValues, decryptionProof);
 
