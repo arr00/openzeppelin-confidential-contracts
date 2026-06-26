@@ -2,7 +2,7 @@ import { ERC7984ERC20WrapperMock } from '../../../../types';
 import { INTERFACE_IDS, INVALID_ID } from '../../../helpers/interface';
 import { FhevmType } from '@fhevm/hardhat-plugin';
 import { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers';
-import { time } from '@nomicfoundation/hardhat-network-helpers';
+import { setStorageAt, time } from '@nomicfoundation/hardhat-network-helpers';
 import { expect } from 'chai';
 import { ethers, fhevm } from 'hardhat';
 
@@ -371,6 +371,43 @@ describe('ERC7984ERC20Wrapper', function () {
       await expect(this.wrapper.unwrapMetadata(unwrapRequestId)).to.eventually.eq(metadata);
     });
 
+    it.only('stores recipient and metadata in a single packed storage slot', async function () {
+      const metadata = '0x0123456789abcdef01234567'; // 12 bytes
+      const recipient = this.recipient;
+
+      await this.wrapper
+        .connect(this.holder)
+        ['$_unwrap(address,address,bytes32,bytes12)'](
+          this.holder,
+          recipient.address,
+          await this.wrapper.confidentialBalanceOf(this.holder.address),
+          metadata,
+        );
+
+      const [unwrapRequestId] = (
+        await this.wrapper.queryFilter(this.wrapper.filters.return$_unwrap_address_address_euint64_bytes12())
+      )[0].args;
+
+      const slot = unwrapRequestStorageSlot(unwrapRequestId);
+      const slotValue = await ethers.provider.getStorage(this.wrapper.target, slot);
+
+      console.log(slotValue);
+    });
+
+    it.only('stores zero metadata in the upper 12 bytes when omitted', async function () {
+      await this.wrapper
+        .connect(this.holder)
+        .unwrap(this.holder, this.holder, await this.wrapper.confidentialBalanceOf(this.holder.address));
+
+      const [, unwrapRequestId] = (await this.wrapper.queryFilter(this.wrapper.filters.UnwrapRequested()))[0].args;
+
+      const slotValue = await ethers.provider.getStorage(
+        this.wrapper.target,
+        unwrapRequestStorageSlot(unwrapRequestId),
+      );
+      console.log(slotValue);
+    });
+
     it('clears metadata on finalize', async function () {
       const metadata = '0x0123456789abcdef01234567';
 
@@ -443,4 +480,13 @@ async function publicDecryptAndFinalizeUnwrap(wrapper: ERC7984ERC20WrapperMock, 
   await expect(wrapper.connect(caller).finalizeUnwrap(amount, abiEncodedClearValues, decryptionProof))
     .to.emit(wrapper, 'UnwrapFinalized')
     .withArgs(to, amount, amount, abiEncodedClearValues);
+}
+
+/** Storage slot of `_unwrapRequests` in `ERC7984ERC20Wrapper` (after six `ERC7984` slots). */
+const UNWRAP_REQUESTS_MAPPING_SLOT = 6n;
+
+function unwrapRequestStorageSlot(unwrapRequestId: string, mappingSlot = UNWRAP_REQUESTS_MAPPING_SLOT): string {
+  return ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(['bytes32', 'uint256'], [unwrapRequestId, mappingSlot]),
+  );
 }
