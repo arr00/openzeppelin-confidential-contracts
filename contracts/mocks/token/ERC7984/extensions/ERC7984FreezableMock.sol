@@ -27,6 +27,10 @@ contract ERC7984FreezableMock is ERC7984Mock, ERC7984Freezable, HandleAccessMana
         _setConfidentialFrozen(account, FHE.fromExternal(encryptedAmount, inputProof));
     }
 
+    function $_setConfidentialFrozen(address account, uint64 amount) public virtual {
+        _setConfidentialFrozen(account, FHE.asEuint64(amount));
+    }
+
     function confidentialAvailableAccess(address account) public {
         euint64 available = _confidentialAvailable(account);
         FHE.allowThis(available);

@@ -3,8 +3,9 @@ import { $ERC7984FreezableMock } from '../../../../types/contracts-exposed/mocks
 import { getAclAddress } from '../../../helpers/accounts';
 import { shouldBehaveLikeERC7984 } from '../ERC7984.behavior';
 import { FhevmType } from '@fhevm/hardhat-plugin';
+import { anyValue } from '@nomicfoundation/hardhat-chai-matchers/withArgs';
 import { expect } from 'chai';
-import { AddressLike, BytesLike, EventLog } from 'ethers';
+import { EventLog } from 'ethers';
 import { ethers, fhevm } from 'hardhat';
 
 const name = 'ConfidentialFungibleToken';
@@ -34,30 +35,19 @@ describe('ERC7984Freezable', function () {
     });
 
     it(`should set and get confidential frozen`, async function () {
-      const { token, acl, recipient, freezer } = this;
+      const { token, acl, recipient } = this;
 
       const amount = 100;
-      const { handles, inputProof } = await fhevm
-        .createEncryptedInput(await token.getAddress(), freezer.address)
-        .add64(amount)
-        .encrypt();
 
-      let params = [recipient.address, handles[0], inputProof] as unknown as [
-        account: AddressLike,
-        encryptedAmount: BytesLike,
-        inputProof: BytesLike,
-      ];
-
-      await expect(token.connect(freezer)['$_setConfidentialFrozen(address,bytes32,bytes)'](...params))
+      await expect(token['$_setConfidentialFrozen(address,uint64)'](recipient.address, amount))
         .to.emit(token, 'TokensFrozen')
-        .withArgs(recipient.address, params[1]);
+        .withArgs(recipient.address, anyValue);
 
       const frozenHandle = await token.confidentialFrozen(recipient.address);
-      expect(frozenHandle).to.equal(ethers.hexlify(params[1]));
       await expect(acl.isAllowed(frozenHandle, recipient.address)).to.eventually.be.true;
       await expect(
         fhevm.userDecryptEuint(FhevmType.euint64, frozenHandle, await token.getAddress(), recipient),
-      ).to.eventually.equal(100);
+      ).to.eventually.equal(amount);
       const balanceHandle = await token.confidentialBalanceOf(recipient.address);
       await expect(
         fhevm.userDecryptEuint(FhevmType.euint64, balanceHandle, await token.getAddress(), recipient),
@@ -67,23 +57,13 @@ describe('ERC7984Freezable', function () {
       await (token as any).connect(recipient).confidentialAvailableAccess(confidentialAvailableArgs);
       await expect(
         fhevm.userDecryptEuint(FhevmType.euint64, availableHandle, await token.getAddress(), recipient),
-      ).to.eventually.equal(900);
+      ).to.eventually.equal(1000 - amount);
     });
 
     it('should transfer max available', async function () {
-      const { token, recipient, freezer, anyone } = this;
+      const { token, recipient, anyone } = this;
 
-      const encryptedInput = await fhevm
-        .createEncryptedInput(await token.getAddress(), freezer.address)
-        .add64(100)
-        .encrypt();
-      await token
-        .connect(freezer)
-        ['$_setConfidentialFrozen(address,bytes32,bytes)'](
-          recipient.address,
-          encryptedInput.handles[0],
-          encryptedInput.inputProof,
-        );
+      await token['$_setConfidentialFrozen(address,uint64)'](recipient.address, 100);
       const confidentialAvailableArgs = recipient.address;
       const availableHandle = await token.confidentialAvailable.staticCall(confidentialAvailableArgs);
       await (token as any).connect(recipient).confidentialAvailableAccess(confidentialAvailableArgs);
@@ -112,19 +92,9 @@ describe('ERC7984Freezable', function () {
     });
 
     it('should transfer zero if transferring more than available', async function () {
-      const { token, recipient, freezer, anyone } = this;
+      const { token, recipient, anyone } = this;
 
-      const encryptedInput = await fhevm
-        .createEncryptedInput(await token.getAddress(), freezer.address)
-        .add64(500)
-        .encrypt();
-      await token
-        .connect(freezer)
-        ['$_setConfidentialFrozen(address,bytes32,bytes)'](
-          recipient.address,
-          encryptedInput.handles[0],
-          encryptedInput.inputProof,
-        );
+      await token['$_setConfidentialFrozen(address,uint64)'](recipient.address, 500);
       const encryptedInput2 = await fhevm
         .createEncryptedInput(await token.getAddress(), recipient.address)
         .add64(501)
