@@ -2,7 +2,6 @@
 pragma solidity ^0.8.27;
 
 import {ERC7984Mock} from "./../../../contracts/mocks/token/ERC7984/ERC7984Mock.sol";
-import {AddressSet, LibAddressSet} from "./AddressSet.sol";
 import {BaseHandler} from "./BaseHandler.sol";
 
 /// @dev Managed handler for {ERC7984} accounting invariants.
@@ -13,8 +12,6 @@ import {BaseHandler} from "./BaseHandler.sol";
 /// invariant contract decrypts the real handles and compares them to this shadow, so the
 /// shadow doubles as the ghost model for INV-02/INV-03.
 contract ERC7984Handler is BaseHandler {
-    using LibAddressSet for AddressSet;
-
     uint64 internal constant MAX = type(uint64).max;
 
     ERC7984Mock public immutable token;
@@ -38,7 +35,7 @@ contract ERC7984Handler is BaseHandler {
     /// `tryIncrease` is reachable. On overflow the real op is a no-op (transferred == 0);
     /// the shadow models exactly that.
     function mint(uint256 toSeed, uint256 amount) external newBlock countCall("mint") {
-        address to = _actors.rand(toSeed);
+        address to = _rand(toSeed);
         amount = bound(amount, 0, MAX);
 
         token.$_mint(to, uint64(amount));
@@ -54,7 +51,7 @@ contract ERC7984Handler is BaseHandler {
     /// @dev Burn a sender-affordable amount so the success path is exercised and the
     /// shadow stays exact. (The insufficient-balance no-op branch is covered by INV-04.)
     function burn(uint256 fromSeed, uint256 amount) external newBlock countCall("burn") {
-        address from = _actors.rand(fromSeed);
+        address from = _rand(fromSeed);
         amount = bound(amount, 0, shadowBalance[from]);
 
         token.$_burn(from, uint64(amount));
@@ -66,15 +63,17 @@ contract ERC7984Handler is BaseHandler {
 
     /// @dev Transfer a sender-affordable amount between actors.
     function transfer(uint256 fromSeed, uint256 toSeed, uint256 amount) external newBlock countCall("transfer") {
-        address from = _actors.rand(fromSeed);
-        address to = _actors.rand(toSeed);
-        amount = bound(amount, 0, shadowBalance[from]);
+        address from = _rand(fromSeed);
+        address to = _rand(toSeed);
+        amount = bound(amount, 0, MAX);
 
         vm.prank(from);
         token.confidentialTransfer(to, uint64(amount));
 
-        // from == to is a net-zero move; the arithmetic below handles it correctly.
-        shadowBalance[from] -= amount;
-        shadowBalance[to] += amount;
+        if (shadowBalance[from] >= amount) {
+            // from == to is a net-zero move; the arithmetic below handles it correctly.
+            shadowBalance[from] -= amount;
+            shadowBalance[to] += amount;
+        }
     }
 }

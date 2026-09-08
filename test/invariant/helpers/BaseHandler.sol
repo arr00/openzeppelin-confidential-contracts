@@ -4,7 +4,7 @@ pragma solidity >=0.8.0;
 import {CommonBase} from "forge-std/Base.sol";
 import {StdCheats} from "forge-std/StdCheats.sol";
 import {StdUtils} from "forge-std/StdUtils.sol";
-import {AddressSet, LibAddressSet} from "./AddressSet.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 /// @dev Base handler for managed (handler-based) invariant testing.
 ///
@@ -17,9 +17,9 @@ import {AddressSet, LibAddressSet} from "./AddressSet.sol";
 /// Concrete handlers inherit this, add per-function wrappers, and maintain ghost
 /// variables. Update ghosts ONLY after the wrapped call succeeds.
 abstract contract BaseHandler is CommonBase, StdCheats, StdUtils {
-    using LibAddressSet for AddressSet;
+    using EnumerableSet for EnumerableSet.AddressSet;
 
-    AddressSet internal _actors;
+    EnumerableSet.AddressSet internal _actors;
     address internal currentActor;
 
     /// @dev call name => number of times invoked (for coverage reporting).
@@ -33,7 +33,7 @@ abstract contract BaseHandler is CommonBase, StdCheats, StdUtils {
     /// @dev Pick an actor deterministically from the seed and prank as them for the
     /// duration of the wrapped call. If the set is empty, create+register a fresh one.
     modifier useActor(uint256 actorSeed) {
-        currentActor = _actors.rand(actorSeed);
+        currentActor = _rand(actorSeed);
         if (currentActor == address(0)) {
             currentActor = address(uint160(uint256(keccak256(abi.encode("actor", actorSeed)))));
             _actors.add(currentActor);
@@ -61,14 +61,21 @@ abstract contract BaseHandler is CommonBase, StdCheats, StdUtils {
         _;
     }
 
+    /// @dev Deterministically pick an actor from the set by fuzzer-provided seed.
+    /// Returns address(0) when the set is empty (callers guard on this).
+    function _rand(uint256 seed) internal view returns (address) {
+        uint256 len = _actors.length();
+        return len == 0 ? address(0) : _actors.at(seed % len);
+    }
+
     // --- views consumed by the invariant test contract -------------------------------
 
     function actors() external view returns (address[] memory) {
-        return _actors.addrs;
+        return _actors.values();
     }
 
     function actorCount() external view returns (uint256) {
-        return _actors.count();
+        return _actors.length();
     }
 
     function callCount(bytes32 key) external view returns (uint256) {
